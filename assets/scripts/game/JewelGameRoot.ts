@@ -1,5 +1,5 @@
 import {
-    _decorator, AudioClip, AudioSource, Color, Component, EventKeyboard, EventTouch,
+    _decorator, AudioClip, Color, Component, EventKeyboard, EventTouch,
     Game, game, input, Input, JsonAsset, KeyCode, Label, Node, ResolutionPolicy,
     profiler, resources, Sprite, SpriteFrame, UITransform, Vec2, Vec3, view,
 } from 'cc';
@@ -9,6 +9,7 @@ import { hitBoard, hitTray, LayoutData } from './core/GridGeometry';
 import { BoardController } from './controller/BoardController';
 import { GameView, PaletteEntry, uiNode } from './view/GameView';
 import { SOUND_NAMES, GameSound } from './GameTuning';
+import { GameAudio } from './GameAudio';
 
 const { ccclass } = _decorator;
 
@@ -35,7 +36,7 @@ export class JewelGameRoot extends Component {
     private level!: LevelData;
     private frames = new Map<string, SpriteFrame>();
     private clips = new Map<GameSound, AudioClip>();
-    private audio!: AudioSource;
+    private audio: GameAudio | null = null;
     private background: Node | null = null;
     private stage: Node | null = null;
     private status: Label | null = null;
@@ -46,7 +47,6 @@ export class JewelGameRoot extends Component {
     async start(): Promise<void> {
         view.setDesignResolutionSize(1080, 1920, ResolutionPolicy.FIXED_HEIGHT);
         profiler.hideStats();
-        this.audio = this.node.addComponent(AudioSource);
         this.status = uiNode('Loading', this.node, 700, 100).addComponent(Label);
         this.status.fontSize = 34;
         this.status.color = new Color(90, 80, 110);
@@ -56,6 +56,7 @@ export class JewelGameRoot extends Component {
         input.on(Input.EventType.KEY_DOWN, this.keyDown, this);
         view.on('canvas-resize', this.resize, this);
         game.on(Game.EVENT_HIDE, this.onHide, this);
+        game.on(Game.EVENT_SHOW, this.onShow, this);
         await this.initialize();
     }
 
@@ -68,7 +69,7 @@ export class JewelGameRoot extends Component {
                 loadJson<LevelData>('data/level'), loadJson<LayoutData>('data/layout'),
                 loadJson<PaletteEntry[]>('data/palette'),
             ]);
-            const paths = ['art/base', 'art/tray', 'art/background'];
+            const paths = ['art/base', 'art/tray', 'art/background', 'art/selection-glow', 'art/sparkle'];
             for (const color of this.palette) paths.push(color.gem, color.correct);
             const [frames, clips] = await Promise.all([
                 Promise.all(paths.map(loadFrame)), Promise.all(SOUND_NAMES.map(loadClip)),
@@ -76,6 +77,7 @@ export class JewelGameRoot extends Component {
             if (!this.alive) return;
             this.frames = new Map(paths.map((path, i) => [path, frames[i]]));
             this.clips = new Map(SOUND_NAMES.map((name, i) => [name, clips[i]]));
+            this.audio = new GameAudio(this.node, this.clips);
             this.background = uiNode('Background', this.node.parent!, 1080, 1920);
             this.background.setSiblingIndex(0);
             const sprite = this.background.addComponent(Sprite);
@@ -98,12 +100,10 @@ export class JewelGameRoot extends Component {
         if (!this.stage) return;
         this.controller?.invalidate();
         this.presentation?.destroy();
+        this.audio?.reset();
         this.model = new BoardModel(this.level);
         this.presentation = new GameView(this.stage, this.model, this.layout, this.palette,
-            this.frames, kind => {
-                const clip = this.clips.get(kind);
-                if (clip) this.audio.playOneShot(clip, kind === 'place' ? 0.45 : 0.75);
-            });
+            this.frames, kind => this.audio?.play(kind));
         this.controller = new BoardController(this.model, this.presentation);
         this.resize();
     }
@@ -136,7 +136,7 @@ export class JewelGameRoot extends Component {
         const x = local.x + this.layout.width / 2, y = this.layout.height / 2 - local.y;
         const tray = hitTray(x, y, this.layout, this.level.trayCols, this.level.trayRows);
         if (this.model!.completed) {
-            if (tray >= 0) this.reset();
+            if (tray >= 0 && this.controller.finished) this.reset();
             return;
         }
         const board = hitBoard(x, y, this.layout, this.level.cols, this.level.rows);
@@ -151,7 +151,14 @@ export class JewelGameRoot extends Component {
 
     private onHide(): void {
         this.finger = null;
+        void this.controller?.setPaused(true);
+        this.audio?.setPaused(true);
         this.presentation?.stop();
+    }
+
+    private onShow(): void {
+        this.audio?.setPaused(false);
+        void this.controller?.setPaused(false).catch(error => console.error('[Jewel]', error));
     }
 
     private installDiagnostics(): void {
@@ -164,6 +171,9 @@ export class JewelGameRoot extends Component {
                 correct: this.model!.correctCount, completed: this.model!.completed,
                 busy: this.controller!.busy, moves: this.model!.moves,
                 audioReady: this.clips.size === SOUND_NAMES.length,
+                activeMoves: this.controller!.activeMoves, finished: this.controller!.finished,
+                colorsRemaining: Array.from(this.model!.remainingByColor.entries()),
+                feedback: this.presentation!.diagnostics(), audio: this.audio?.diagnostics(),
             }),
             reset: () => this.reset(),
             click: (region: Region, index: number) => this.controller!.click(region, index),
@@ -174,6 +184,7 @@ export class JewelGameRoot extends Component {
         this.alive = false;
         this.controller?.invalidate();
         this.presentation?.destroy();
+        this.audio?.destroy();
         this.background?.destroy();
         input.off(Input.EventType.TOUCH_START, this.touchStart, this);
         input.off(Input.EventType.TOUCH_END, this.touchEnd, this);
@@ -181,6 +192,7 @@ export class JewelGameRoot extends Component {
         input.off(Input.EventType.KEY_DOWN, this.keyDown, this);
         view.off('canvas-resize', this.resize, this);
         game.off(Game.EVENT_HIDE, this.onHide, this);
+        game.off(Game.EVENT_SHOW, this.onShow, this);
         if (DEBUG) delete (globalThis as typeof globalThis & { __jewel?: unknown }).__jewel;
     }
 }

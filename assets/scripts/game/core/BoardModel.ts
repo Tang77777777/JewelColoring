@@ -17,7 +17,8 @@ export interface Action {
     type: 'select' | 'cancel' | 'move' | 'invalid';
     moves: Transfer[];
     trayShifts?: Transfer[];
-    reason?: 'locked' | 'empty' | 'color' | 'full' | 'occupied';
+    completedColors?: number[];
+    reason?: 'locked' | 'empty' | 'color' | 'full' | 'occupied' | 'busy';
 }
 
 const NEIGHBORS = [[-1, -1], [0, -1], [1, -1], [-1, 0],
@@ -56,6 +57,7 @@ export class BoardModel {
     readonly board: number[];
     readonly tray: number[];
     readonly locations: Location[];
+    readonly remainingByColor = new Map<number, number>();
     selection: Selection | null = null;
     moves = 0;
 
@@ -66,6 +68,10 @@ export class BoardModel {
         this.locations = level.gems.map(gem => {
             this.board[gem.cell] = gem.id;
             return { region: 'board', index: gem.cell };
+        });
+        level.targets.forEach((color, index) => {
+            if (color >= 0) this.remainingByColor.set(color,
+                (this.remainingByColor.get(color) ?? 0) + Number(!this.isCorrect(index)));
         });
     }
 
@@ -219,7 +225,15 @@ export class BoardModel {
         selection.ids = selection.ids.slice(moves.length);
         if (!selection.ids.length) this.selection = null;
         this.moves++;
-        return { type: 'move', moves, trayShifts };
+        const completedColors: number[] = [];
+        for (const move of moves) {
+            if (move.to.region !== 'board') continue;
+            const color = this.level.gems[move.gem].color;
+            const remaining = this.remainingByColor.get(color)! - 1;
+            this.remainingByColor.set(color, remaining);
+            if (remaining === 0) completedColors.push(color);
+        }
+        return { type: 'move', moves, trayShifts, completedColors };
     }
 
     private invalid(reason: Action['reason']): Action {
@@ -241,6 +255,13 @@ export class BoardModel {
             });
         }
         if (found.size !== this.level.gems.length) throw new Error('Gem conservation violated');
+        const remaining = new Map<number, number>();
+        this.level.targets.forEach((color, index) => {
+            if (color >= 0) remaining.set(color, (remaining.get(color) ?? 0) + Number(!this.isCorrect(index)));
+        });
+        for (const [color, count] of remaining) {
+            if (this.remainingByColor.get(color) !== count) throw new Error('Color progress mismatch');
+        }
         if (this.selection) {
             const color = this.selectedColor;
             for (const id of this.selection.ids) {

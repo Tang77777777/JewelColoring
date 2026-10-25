@@ -161,7 +161,7 @@ await test('controller blocks duplicate moves and ignores an old session complet
   let wins = 0;
   const c = new BoardController(m, {
     present: action => action.type === 'move' ? new Promise(resolve => pending.push(resolve)) : Promise.resolve(),
-    sync() {}, celebrate() { wins++; },
+    sync() {}, async celebrateColor() {}, async celebrate() { wins++; },
   });
   await c.click('board', 0);
   const moving = c.click('tray', 0);
@@ -173,6 +173,145 @@ await test('controller blocks duplicate moves and ignores an old session complet
   await moving;
   assert.equal(c.busy, false);
   assert.equal(wins, 0);
+});
+function controlled(model) {
+  const pending = [], colors = [], actions = [];
+  let wins = 0;
+  const controller = new BoardController(model, {
+    present(action) {
+      actions.push(action);
+      return action.type === 'move'
+        ? new Promise(resolve => pending.push(resolve)) : Promise.resolve();
+    },
+    sync() {},
+    async celebrateColor(color) { colors.push(color); },
+    async celebrate() { wins++; },
+  });
+  return { controller, pending, colors, actions, wins: () => wins };
+}
+await test('moving tray permits unrelated board selection but reserves sources and the tray', async () => {
+  const m = new BoardModel(level);
+  const { controller: c, pending, actions } = controlled(m);
+  await c.click('board', 9);
+  const moving = c.click('tray', 69);
+  const count = m.moves;
+  assert.equal(c.canClick('board', 31), true);
+  await c.click('board', 31);
+  assert.deepEqual(m.selection.ids, m.boardGroup(31));
+  assert.equal(c.activeMoves, 1);
+  assert.equal(c.canClick('board', 9), false);
+  await c.click('tray', 0);
+  assert.equal(actions.at(-1).reason, 'busy');
+  assert.equal(m.moves, count);
+  await c.click('outside');
+  assert.equal(m.selection, null);
+  pending.shift()();
+  await moving;
+  assert.equal(c.busy, false);
+  assert.equal(c.canClick('tray', 0), true);
+  m.assertValid();
+});
+await test('disjoint board transfers overlap; color rewards wait for every active landing', async () => {
+  const m = new BoardModel(fixture([1, 2, 0, 4, 5, 3], [0, 1, 2, 3, 4, 5], 6, 6, 1));
+  for (const cell of [0, 3]) { m.clickBoard(cell); m.clickTray(5); }
+  const { controller: c, pending, colors } = controlled(m);
+  await c.click('board', 1);
+  const first = c.click('board', 0);
+  await c.click('board', 4);
+  const second = c.click('board', 3);
+  assert.equal(c.activeMoves, 2);
+  assert.equal(c.canClick('board', 0), false);
+  assert.equal(c.canClick('board', 1), false);
+  pending[1]();
+  await second;
+  assert.deepEqual(colors, []);
+  assert.equal(c.activeMoves, 1);
+  pending[0]();
+  await first;
+  assert.deepEqual(colors, [4, 1]);
+  assert.equal(c.busy, false);
+  assert.equal(m.remainingByColor.get(1), 0);
+  assert.equal(m.remainingByColor.get(4), 0);
+  m.assertValid();
+});
+await test('background defers rewards; resume announces each color and victory only once', async () => {
+  const m = new BoardModel(fixture([1, 0], [0, 1], 2));
+  m.clickBoard(0); m.clickTray(0);
+  const { controller: c, pending, colors, wins } = controlled(m);
+  await c.click('board', 1);
+  const first = c.click('board', 0);
+  await c.setPaused(true);
+  pending.shift()();
+  await first;
+  assert.deepEqual(colors, []);
+  assert.equal(c.canClick('tray', 0), false);
+  await c.setPaused(false);
+  assert.deepEqual(colors, [1]);
+  await c.click('tray', 0);
+  const last = c.click('board', 1);
+  assert.equal(m.completed, true);
+  assert.equal(c.finished, false);
+  assert.equal(wins(), 0);
+  pending.shift()();
+  await last;
+  await c.setPaused(false);
+  await c.click('outside');
+  assert.deepEqual(colors, [1, 0]);
+  assert.equal(wins(), 1);
+  assert.equal(c.finished, true);
+  assert.equal(c.busy, false);
+});
+await test('new transfer during a color reward drains the remaining queue and final reward', async () => {
+  const m = new BoardModel(fixture([1, 0], [0, 1], 2));
+  m.clickBoard(0); m.clickTray(0);
+  const pending = [], colorDone = [], colors = [];
+  let wins = 0;
+  const c = new BoardController(m, {
+    present: action => action.type === 'move' ? new Promise(resolve => pending.push(resolve)) : Promise.resolve(),
+    sync() {},
+    celebrateColor(color) {
+      colors.push(color);
+      return new Promise(resolve => colorDone.push(resolve));
+    },
+    async celebrate() { wins++; },
+  });
+  await c.click('board', 1);
+  const first = c.click('board', 0);
+  pending.shift()();
+  while (!colorDone.length) await Promise.resolve();
+  const select = c.click('tray', 0);
+  const last = c.click('board', 1);
+  pending.shift()();
+  await Promise.resolve();
+  colorDone.shift()();
+  while (!colorDone.length) await Promise.resolve();
+  assert.deepEqual(colors, [1, 0]);
+  assert.equal(wins, 0);
+  colorDone.shift()();
+  await Promise.all([first, select, last]);
+  assert.equal(wins, 1);
+  assert.equal(c.busy, false);
+  assert.equal(c.finished, true);
+});
+await test('invalidating an active color reward cannot start an old victory', async () => {
+  const m = new BoardModel(fixture([1, 0], [0, 1], 2));
+  m.clickBoard(0); m.clickTray(0);
+  m.clickBoard(1); m.clickBoard(0);
+  let endColor, wins = 0;
+  const c = new BoardController(m, {
+    async present() {}, sync() {},
+    celebrateColor() { return new Promise(resolve => { endColor = resolve; }); },
+    async celebrate() { wins++; },
+  });
+  await c.click('tray', 0);
+  const last = c.click('board', 1);
+  while (!endColor) await Promise.resolve();
+  c.invalidate();
+  endColor();
+  await last;
+  assert.equal(wins, 0);
+  assert.equal(c.finished, false);
+  assert.equal(c.busy, false);
 });
 await test('real pineapple tray: grouped insertion, cross-row selection and consumption reflow', () => {
   const m = new BoardModel(level);
@@ -211,10 +350,12 @@ await test('real pineapple tray: grouped insertion, cross-row selection and cons
 await test('pineapple completes using legal player commands with conservation after every action', () => {
   const m = new BoardModel(level);
   const trace = [];
+  const completedColors = [];
   const command = (region, index) => {
     const action = region === 'board' ? m.clickBoard(index)
       : region === 'tray' ? m.clickTray(index) : m.cancel();
     assert.notEqual(action.type, 'invalid');
+    completedColors.push(...(action.completedColors ?? []));
     m.assertValid();
     trace.push({ region, index, type: action.type });
   };
@@ -245,6 +386,9 @@ await test('pineapple completes using legal player commands with conservation af
   }
   assert.equal(m.completed, true);
   assert.equal(m.correctCount, 526);
+  assert.equal(new Set(completedColors).size, 7);
+  assert.equal(completedColors.length, 7);
+  assert.ok(Array.from(m.remainingByColor.values()).every(count => count === 0));
   assert.ok(trace.some(action => action.region === 'tray'));
   fs.mkdirSync(path.join(root, 'tests'), { recursive: true });
   fs.writeFileSync(path.join(root, 'tests/pineapple-solution.json'), JSON.stringify(trace, null, 2) + '\n');

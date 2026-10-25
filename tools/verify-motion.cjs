@@ -18,6 +18,22 @@ fs.mkdirSync(output, { recursive: true });
     page.on('pageerror', error => errors.push(error.message));
     await page.goto(process.env.JEWEL_URL || 'http://127.0.0.1:8766/web-validation/');
     await page.waitForFunction(() => globalThis.__jewel?.snapshot(), null, { timeout: 30000 });
+    // Use a real touch during an active transfer, without awaiting that transfer.
+    await page.evaluate(async () => {
+      await __jewel.click('board', 9);
+      void __jewel.click('tray', 69);
+    });
+    await page.waitForTimeout(50);
+    await page.touchscreen.tap((204 + (31 % 21 + 0.5) * 32) / 2,
+      (220 + (Math.floor(31 / 21) + 0.5) * 32) / 2);
+    const overlap = await page.evaluate(() => __jewel.snapshot());
+    assert.equal(overlap.activeMoves, 1);
+    assert.ok(overlap.selection?.ids.length > 0);
+    assert.equal(overlap.level.gems[overlap.selection.ids[0]].color,
+      overlap.level.gems[overlap.board[31]].color);
+    assert.equal(overlap.feedback.highlights, overlap.selection.ids.length);
+    await page.screenshot({ path: path.join(output, 'selection-during-flight.png') });
+    await page.evaluate(() => __jewel.reset());
     const report = await page.evaluate(async () => {
       const cc = await System.import('cc');
       const api = globalThis.__jewel;
@@ -55,7 +71,8 @@ fs.mkdirSync(output, { recursive: true });
       await api.click('board', 31);
       await wait(160);
       const selected = api.snapshot().selection.ids;
-      const deposit = await capture('tray', 69, [selected[0], selected[69]]);
+      const deposit = await capture('tray', 69, [selected[0], selected[1], selected[69]]);
+      deposit.landings = api.snapshot().audio.events.filter(event => event.kind === 'store').map(event => event.time);
       api.reset();
       for (const cell of [577, 493, 435]) {
         await api.click('board', cell);
@@ -64,7 +81,8 @@ fs.mkdirSync(output, { recursive: true });
       await api.click('tray', 0);
       await wait(160);
       const state = api.snapshot();
-      const refill = await capture('board', 575, [state.selection.ids[0], state.tray[7]]);
+      const refill = await capture('board', 575, [state.selection.ids[0], state.selection.ids[1], state.tray[7]]);
+      refill.landings = api.snapshot().audio.events.filter(event => event.kind === 'place').map(event => event.time);
       api.reset();
       await api.click('board', 31);
       const interrupted = api.click('tray', 0);
@@ -72,16 +90,25 @@ fs.mkdirSync(output, { recursive: true });
       cc.game.emit(cc.Game.EVENT_HIDE);
       await interrupted;
       const stopped = api.snapshot();
+      const soundsAtHide = stopped.audio.events.length;
+      await wait(400);
+      const quietWhileHidden = api.snapshot().audio.events.length === soundsAtHide;
+      cc.game.emit(cc.Game.EVENT_SHOW);
+      await api.click('board', 9);
+      const resumed = api.snapshot();
       return { deposit, refill, interrupted: {
         busy: stopped.busy,
         gems: stopped.board.filter(id => id >= 0).length + stopped.tray.filter(id => id >= 0).length,
+        moving: stopped.feedback.moving, effects: stopped.feedback.effects,
+        activeAudio: stopped.audio.active, quietWhileHidden,
+        resumedSelection: resumed.selection?.ids.length ?? 0,
       } };
     });
     const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
     const firstShift = report.refill.samples.find(sample =>
-      distance(sample.positions[1], report.refill.samples[0].positions[1]) > 0.5);
-    const destination = report.refill.samples.at(-1).positions[0];
-    const firstArrival = report.refill.samples.find(sample => distance(sample.positions[0], destination) < 0.5);
+      distance(sample.positions[2], report.refill.samples[0].positions[2]) > 0.5);
+    const destination = report.refill.samples.at(-1).positions[1];
+    const lastArrival = report.refill.samples.find(sample => distance(sample.positions[1], destination) < 0.5);
     const intervals = report.deposit.samples.slice(1).map((s, i) => s.time - report.deposit.samples[i].time)
       .sort((a, b) => a - b);
     const start = report.deposit.samples[0].positions[0];
@@ -97,16 +124,29 @@ fs.mkdirSync(output, { recursive: true });
       depositMs: Math.round(report.deposit.duration),
       refillMs: Math.round(report.refill.duration),
       refillStartsMs: Math.round(firstShift.time),
-      placementArrivesMs: Math.round(firstArrival.time),
+      lastPlacementArrivesMs: Math.round(lastArrival.time),
       frameP95Ms: Math.round(intervals[Math.floor(intervals.length * 0.95)]),
       minMidFlightSpeed: Math.round(Math.min(...middleSpeeds)),
+      depositSpacingMs: Math.round((report.deposit.landings.at(-1) - report.deposit.landings[0]) / 69),
+      placementSpacingMs: Math.round(report.refill.landings[1] - report.refill.landings[0]),
+      selectedDuringFlight: overlap.selection.ids.length,
     };
     assert.equal(report.interrupted.busy, false);
     assert.equal(report.interrupted.gems, 526);
+    assert.equal(report.interrupted.moving, 0);
+    assert.equal(report.interrupted.effects, 0);
+    assert.equal(report.interrupted.activeAudio, 0);
+    assert.equal(report.interrupted.quietWhileHidden, true);
+    assert.ok(report.interrupted.resumedSelection > 0);
     assert.deepEqual(errors, []);
     if (label !== 'before') {
-      assert.ok(firstShift.time < firstArrival.time, 'Refill should overlap the placement flight');
-      assert.ok(report.deposit.duration < 600, 'A full tray deposit should finish promptly');
+      assert.ok(firstShift.time < lastArrival.time, 'Refill should overlap the final placement flight');
+      assert.equal(report.deposit.landings.length, 70);
+      assert.ok(report.summary.depositSpacingMs >= 35 && report.summary.depositSpacingMs <= 55,
+        'A full tray must retain a 40 ms per-gem rhythm');
+      assert.ok(report.summary.placementSpacingMs >= 30 && report.summary.placementSpacingMs <= 75,
+        'Board placements must retain a 50 ms per-gem rhythm');
+      assert.ok(report.deposit.duration >= 2800 && report.deposit.duration < 4500);
       assert.ok(middleSpeeds.length > 0 && Math.min(...middleSpeeds) > 500,
         'Flight should keep moving through the middle of its path');
     }

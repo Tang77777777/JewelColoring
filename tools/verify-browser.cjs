@@ -56,7 +56,7 @@ fs.mkdirSync(output, { recursive: true });
         y = state.layout.tray.y + state.layout.slot.y + Math.floor(index / 14) * state.layout.slot.stepY;
       }
       await page.touchscreen.tap(offsetX + x * s, offsetY + y * s);
-      if (wait) await page.waitForFunction(() => !globalThis.__jewel.snapshot().busy, null, { timeout: 5000 });
+      if (wait) await page.waitForFunction(() => !globalThis.__jewel.snapshot().busy, null, { timeout: 15000 });
     }
     for (const action of regression) {
       const audioBefore = await page.evaluate(() => globalThis.__audioSamples.length);
@@ -99,6 +99,16 @@ fs.mkdirSync(output, { recursive: true });
     assert.equal(final.completed, true);
     assert.equal(final.correct, 526);
     assert.equal(final.tray.filter(id => id >= 0).length, 0);
+    assert.equal(final.finished, true);
+    assert.equal(final.feedback.colorRewards.length, 7);
+    assert.equal(new Set(final.feedback.colorRewards).size, 7);
+    assert.equal(final.feedback.wins, 1);
+    assert.equal(final.feedback.moving, 0);
+    assert.equal(final.feedback.effects, 0);
+    const kinds = [...new Set(final.audio.events.map(event => event.kind))];
+    for (const kind of ['pick', 'store', 'place', 'group', 'refill', 'color', 'win']) {
+      assert.ok(kinds.includes(kind), `Missing sound: ${kind}`);
+    }
     await page.waitForTimeout(1000);
     await canvas.screenshot({ path: path.join(output, 'complete.png') });
     await tap('tray', 0);
@@ -120,6 +130,7 @@ fs.mkdirSync(output, { recursive: true });
       nonSilentRunning: globalThis.__audioSamples.filter(s => s.peak > 0.01 && s.context.state === 'running').length,
     }));
     const report = { url, commands: trace.length, transfers: final.moves, correct: final.correct,
+      colorRewards: final.feedback.colorRewards, wins: final.feedback.wins, soundKinds: kinds,
       trayRegressionCommands: regression.length, audio, resetDuringFlight: true,
       restarted: true, viewportChecks, errors };
     fs.writeFileSync(path.join(output, 'browser-report.json'), JSON.stringify(report, null, 2) + '\n');

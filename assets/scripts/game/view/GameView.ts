@@ -1,4 +1,4 @@
-import { Color, game, Graphics, Layers, Node, Sprite, SpriteFrame, Tween, UITransform, Vec3, tween } from 'cc';
+import { Color, Graphics, Layers, Node, Sprite, SpriteFrame, Tween, UIOpacity, UITransform, Vec3, tween } from 'cc';
 import { Action, BoardModel, Location, Transfer } from '../core/BoardModel';
 import { LayoutData } from '../core/GridGeometry';
 import { GameSound, GameTuning as T } from '../GameTuning';
@@ -21,17 +21,28 @@ export function uiNode(name: string, parent: Node, width: number, height: number
 
 export class GameView {
     private readonly gems = new Map<number, Node>();
+    private readonly highlights = new Map<number, Node>();
+    private readonly moving = new Set<number>();
+    private readonly blockedBoard = new Set<number>();
     private readonly boardLayer: Node;
     private readonly trayLayer: Node;
     private readonly flightLayer: Node;
+    private readonly shade: Graphics;
     private readonly hints: Graphics;
+    private readonly hintOpacity: UIOpacity;
     private readonly pending = new Set<() => void>();
     private readonly effectLayer: Node;
+    private readonly effectPool: Node[] = [];
+    private readonly activeEffects = new Set<Node>();
+    private readonly colorRewards: number[] = [];
+    private winCount = 0;
+    private targetCount = 0;
+    private epoch = 0;
     private destroyed = false;
     private selected = new Set<number>();
-    private renderCorrect = new Map<number, boolean>();
+    private readonly renderCorrect = new Map<number, boolean>();
     private readonly renderedLocations = new Map<number, Location>();
-    private readonly homeScale = 1;
+    private hintKey = '';
 
     constructor(
         private readonly root: Node,
@@ -44,18 +55,19 @@ export class GameView {
         this.image('BaseArt', root, frames.get('art/base')!, layout.board.width, layout.board.height)
             .setPosition(this.point(layout.board.x + layout.board.width / 2,
                 layout.board.y + layout.board.height / 2));
+        this.shade = uiNode('TargetShade', root, layout.width, layout.height).addComponent(Graphics);
+        this.hints = uiNode('TargetHints', root, layout.width, layout.height).addComponent(Graphics);
+        this.hintOpacity = this.hints.node.addComponent(UIOpacity);
         this.boardLayer = uiNode('GemLayer', root, layout.width, layout.height);
         this.image('TrayArt', root, frames.get('art/tray')!, layout.tray.width, layout.tray.height)
             .setPosition(this.point(layout.tray.x + layout.tray.width / 2,
                 layout.tray.y + layout.tray.height / 2));
         this.trayLayer = uiNode('TrayGemLayer', root, layout.width, layout.height);
-        this.hints = uiNode('TargetHints', root, layout.width, layout.height).addComponent(Graphics);
         this.flightLayer = uiNode('FlightLayer', root, layout.width, layout.height);
         this.effectLayer = uiNode('CompletionLayer', root, layout.width, layout.height);
         for (const gem of model.level.gems) {
-            const node = this.image(`Gem-${gem.id}`, this.boardLayer,
-                frames.get(palette[gem.color].gem)!, layout.cell, layout.cell);
-            this.gems.set(gem.id, node);
+            this.gems.set(gem.id, this.image(`Gem-${gem.id}`, this.boardLayer,
+                frames.get(palette[gem.color].gem)!, layout.cell, layout.cell));
         }
         this.sync(true);
     }
@@ -93,67 +105,124 @@ export class GameView {
         this.renderCorrect.set(id, correct);
     }
 
+    private highlight(id: number, active: boolean): void {
+        let node = this.highlights.get(id);
+        if (!node && active) {
+            node = this.image('SelectedGlow', this.gems.get(id)!, this.frames.get('art/selection-glow')!, 36, 36);
+            this.highlights.set(id, node);
+        }
+        if (node) node.active = active;
+    }
+
     sync(immediate = false): void {
         if (this.destroyed) return;
         const selected = new Set(this.model.selection?.ids ?? []);
-        let changed = immediate;
         for (const [id, node] of this.gems) {
+            // A different selection must never finish or restart an in-flight task.
+            if (this.moving.has(id)) continue;
             const location = this.model.locations[id];
             const isSelected = selected.has(id);
             const previous = this.renderedLocations.get(id);
             if (!immediate && isSelected === this.selected.has(id)
                 && previous?.region === location.region && previous.index === location.index) continue;
-            changed = true;
             this.renderedLocations.set(id, { ...location });
             this.applyFrame(id);
+            this.highlight(id, isSelected);
             const parent = isSelected ? this.flightLayer
                 : location.region === 'board' ? this.boardLayer : this.trayLayer;
             if (node.parent !== parent) node.setParent(parent);
             const position = this.position(location);
             if (isSelected) position.y += T.lift;
-            const scale = isSelected ? T.liftScale : this.homeScale;
+            const scale = isSelected ? T.liftScale : 1;
+            Tween.stopAllByTarget(node);
             if (immediate) {
-                Tween.stopAllByTarget(node);
                 node.setPosition(position);
                 node.setScale(scale, scale, 1);
-            } else if (Vec3.squaredDistance(node.position, position) > 0.01
-                || Math.abs(node.scale.x - scale) > 0.001 || Math.abs(node.scale.y - scale) > 0.001) {
-                Tween.stopAllByTarget(node);
+            } else {
                 tween(node).to(T.liftDuration, { position, scale: new Vec3(scale, scale, 1) },
                     { easing: 'quadOut' }).start();
             }
         }
         this.selected = selected;
-        if (!changed) return;
-        this.hints.clear();
+        this.refreshTargets(immediate);
+    }
+
+    private refreshTargets(force = false): void {
         const color = this.model.selectedColor;
-        if (color >= 0) {
-            this.hints.lineWidth = 2;
-            this.hints.strokeColor = new Color(255, 255, 255, 220);
-            this.model.level.targets.forEach((target, index) => {
-                if (target !== color || this.model.board[index] >= 0) return;
-                const p = this.position({ region: 'board', index });
-                this.hints.circle(p.x, p.y, 12);
-            });
-            this.hints.stroke();
+        const key = `${color}:${this.model.moves}:${this.blockedBoard.size}`;
+        if (!force && this.hintKey === key) return;
+        this.hintKey = key;
+        this.shade.clear();
+        this.hints.clear();
+        this.targetCount = 0;
+        Tween.stopAllByTarget(this.hintOpacity);
+        this.hintOpacity.opacity = 255;
+        if (color < 0) return;
+        this.shade.fillColor = new Color(40, 36, 52, T.targetDimAlpha);
+        this.hints.lineWidth = 2;
+        this.hints.strokeColor = new Color(255, 255, 255, 250);
+        const rgb = this.palette[color].baseRGB;
+        this.hints.fillColor = new Color(rgb[0], rgb[1], rgb[2], 85);
+        this.model.level.targets.forEach((target, index) => {
+            if (target < 0 || this.model.board[index] >= 0 || this.blockedBoard.has(index)) return;
+            const p = this.position({ region: 'board', index });
+            if (target === color) {
+                this.hints.circle(p.x, p.y, 13);
+                this.targetCount++;
+            } else this.shade.circle(p.x, p.y, 14);
+        });
+        this.shade.fill();
+        this.hints.fill();
+        this.model.level.targets.forEach((target, index) => {
+            if (target !== color || this.model.board[index] >= 0 || this.blockedBoard.has(index)) return;
+            const p = this.position({ region: 'board', index });
+            this.hints.circle(p.x, p.y, 13);
+        });
+        this.hints.stroke();
+        if (this.targetCount) {
+            tween(this.hintOpacity).to(0.35, { opacity: 150 }, { easing: 'sineInOut' })
+                .to(0.35, { opacity: 255 }, { easing: 'sineInOut' }).repeat(2).start();
         }
     }
 
     async present(action: Action): Promise<void> {
+        if (this.destroyed) return;
         if (action.type === 'move') {
-            this.hints.clear();
+            const epoch = this.epoch;
             const shifts = action.trayShifts ?? [];
+            const involved = [...action.moves, ...shifts];
+            for (const move of involved) {
+                this.moving.add(move.gem);
+                this.highlight(move.gem, false);
+                for (const location of [move.from, move.to]) {
+                    if (location.region === 'board') this.blockedBoard.add(location.index);
+                }
+            }
+            this.sync();
             const fromTray = action.moves[0]?.from.region === 'tray';
-            const lastDeparture = Math.min(T.maxGroupDelay, Math.max(0, action.moves.length - 1) * T.stagger);
-            // Close the gap once the source gems have left, while their flight continues.
-            await Promise.all([
-                this.fly(action.moves),
-                this.slideTray(shifts, fromTray ? lastDeparture + T.refillDelay : 0),
-            ]);
+            const interval = action.moves[0]?.to.region === 'tray' ? T.depositInterval : T.placementInterval;
+            const lastDeparture = Math.max(0, action.moves.length - 1) * interval;
+            try {
+                await Promise.all([
+                    this.fly(action.moves, interval),
+                    this.slideTray(shifts, fromTray ? lastDeparture + T.refillDelay : 0),
+                ]);
+            } finally {
+                if (epoch === this.epoch) {
+                    for (const move of involved) {
+                        this.moving.delete(move.gem);
+                        this.renderedLocations.delete(move.gem);
+                        for (const location of [move.from, move.to]) {
+                            if (location.region === 'board') this.blockedBoard.delete(location.index);
+                        }
+                    }
+                    this.sync();
+                }
+            }
         } else if (action.type === 'invalid') {
             this.sound('invalid');
-            const ids = this.model.selection?.ids ?? [];
-            for (const id of ids.slice(0, 40)) {
+            for (const id of (this.model.selection?.ids ?? []).slice(0, 40)) {
+                if (this.moving.has(id)) continue;
                 const node = this.gems.get(id)!;
                 const origin = this.position(this.model.locations[id]);
                 origin.y += T.lift;
@@ -168,13 +237,11 @@ export class GameView {
         }
     }
 
-    private fly(moves: Transfer[]): Promise<void> {
+    private fly(moves: Transfer[], interval: number): Promise<void> {
         return new Promise(resolve => {
             let remaining = moves.length;
             const finish = () => { this.pending.delete(finish); resolve(); };
             this.pending.add(finish);
-            const interval = Math.min(T.stagger, T.maxGroupDelay / Math.max(1, moves.length - 1));
-            let lastSoundAt = -Infinity;
             moves.forEach((move, order) => {
                 const node = this.gems.get(move.gem)!;
                 Tween.stopAllByTarget(node);
@@ -182,16 +249,13 @@ export class GameView {
                 const origin = node.position.clone();
                 const startScale = node.scale.x;
                 const destination = this.position(move.to);
-                const distance = Vec3.distance(origin, destination);
-                const duration = Math.min(T.flightMaxDuration, Math.max(T.flightMinDuration, distance / T.flightSpeed));
-                const arc = Math.min(T.flightArc, distance * 0.06);
+                const arc = Math.min(T.flightArc, Vec3.distance(origin, destination) * 0.06);
                 tween(node).delay(order * interval)
-                    .update(duration, (target, ratio) => {
+                    .update(T.flightDuration, (target, ratio) => {
                         const progress = ratio * (2 - ratio);
                         target.setPosition(
                             origin.x + (destination.x - origin.x) * progress,
-                            origin.y + (destination.y - origin.y) * progress + 4 * arc * progress * (1 - progress),
-                            0,
+                            origin.y + (destination.y - origin.y) * progress + 4 * arc * progress * (1 - progress), 0,
                         );
                         const scale = startScale + (T.landingScale - startScale) * progress;
                         target.setScale(scale, scale, 1);
@@ -199,21 +263,22 @@ export class GameView {
                     .call(() => {
                         if (this.destroyed) return;
                         this.applyFrame(move.gem);
-                        const now = game.totalTime / 1000;
-                        // Every transfer has feedback; cap overlapping voices in large groups.
-                        if (now - lastSoundAt >= T.landingSoundInterval || order === moves.length - 1) {
-                            this.sound('place');
-                            lastSoundAt = now;
-                        }
+                        this.sound(move.to.region === 'tray' ? 'store' : 'place');
+                        if (move.to.region === 'board') void this.glint(destination, 0, 0.75);
                     })
                     .to(T.landingDuration, { scale: new Vec3(1, 1, 1) }, { easing: 'sineOut' })
-                    .call(() => { if (--remaining === 0) finish(); }).start();
+                    .call(() => {
+                        if (--remaining === 0) {
+                            if (move.to.region === 'board') this.sound('group');
+                            finish();
+                        }
+                    }).start();
             });
             if (!moves.length) finish();
         });
     }
 
-    private slideTray(moves: Transfer[], delay = 0): Promise<void> {
+    private slideTray(moves: Transfer[], delay: number): Promise<void> {
         if (!moves.length || this.destroyed) return Promise.resolve();
         const selected = new Set(this.model.selection?.ids ?? []);
         return new Promise(resolve => {
@@ -242,22 +307,85 @@ export class GameView {
         });
     }
 
-    celebrate(): void {
-        this.sound('win');
-        const center = this.point(this.layout.board.x + this.layout.board.width / 2,
-            this.layout.board.y + this.layout.board.height / 2);
-        for (const [id, node] of this.gems) {
-            const p = this.position(this.model.locations[id]);
-            tween(node).delay(Vec3.distance(p, center) / 1500)
-                .to(0.16, { scale: new Vec3(1.12, 1.12, 1) }, { easing: 'sineOut' })
-                .to(0.22, { scale: new Vec3(1, 1, 1) }, { easing: 'sineIn' }).start();
+    private glint(position: Vec3, delay: number, scale: number): Promise<void> {
+        if (this.destroyed) return Promise.resolve();
+        let node = this.effectPool.pop();
+        if (!node) {
+            node = this.image('GemSheen', this.effectLayer, this.frames.get('art/sparkle')!, 32, 32);
+            node.addComponent(UIOpacity);
         }
+        const effect = node;
+        const opacity = effect.getComponent(UIOpacity)!;
+        effect.active = true;
+        effect.setPosition(position);
+        effect.setScale(scale * 0.65, scale * 0.65, 1);
+        opacity.opacity = 0;
+        this.activeEffects.add(effect);
+        return new Promise(resolve => {
+            let done = false;
+            const finish = () => {
+                if (done) return;
+                done = true;
+                this.pending.delete(finish);
+                this.activeEffects.delete(effect);
+                Tween.stopAllByTarget(effect);
+                Tween.stopAllByTarget(opacity);
+                effect.active = false;
+                if (this.effectPool.length < 160) this.effectPool.push(effect);
+                else effect.destroy();
+                resolve();
+            };
+            this.pending.add(finish);
+            tween(effect).delay(delay).to(T.sparkleDuration,
+                { scale: new Vec3(scale * 1.15, scale * 1.15, 1) }, { easing: 'sineOut' }).start();
+            tween(opacity).delay(delay).to(0.055, { opacity: 235 })
+                .to(T.sparkleDuration - 0.055, { opacity: 0 }, { easing: 'sineOut' }).call(finish).start();
+        });
+    }
+
+    private sweep(ids: number[], duration: number): Promise<void[]> {
+        const diagonal = (id: number) => {
+            const cell = this.model.locations[id].index;
+            return cell % this.model.level.cols + Math.floor(cell / this.model.level.cols);
+        };
+        const positions = ids.map(diagonal);
+        const min = Math.min(...positions), max = Math.max(...positions);
+        return Promise.all(ids.map(id => this.glint(this.position(this.model.locations[id]),
+            (diagonal(id) - min) / Math.max(1, max - min) * duration, 1.05)));
+    }
+
+    async celebrateColor(color: number): Promise<void> {
+        if (this.destroyed) return;
+        this.colorRewards.push(color);
+        this.sound('color');
+        const ids = this.model.level.gems.filter(gem => gem.color === color).map(gem => gem.id);
+        await this.sweep(ids, T.colorSweepDuration);
+    }
+
+    async celebrate(): Promise<void> {
+        if (this.destroyed) return;
+        this.winCount++;
+        this.sound('win');
+        await this.sweep(this.model.level.gems.map(gem => gem.id), T.boardSweepDuration);
+    }
+
+    diagnostics(): object {
+        return {
+            moving: this.moving.size, targets: this.targetCount,
+            highlights: Array.from(this.highlights.values()).filter(node => node.active).length,
+            effects: this.activeEffects.size, colorRewards: [...this.colorRewards], wins: this.winCount,
+        };
     }
 
     stop(): void {
+        this.epoch++;
         for (const node of this.gems.values()) Tween.stopAllByTarget(node);
+        Tween.stopAllByTarget(this.hintOpacity);
         for (const finish of Array.from(this.pending)) finish();
+        this.moving.clear();
+        this.blockedBoard.clear();
         this.sync(true);
+        Tween.stopAllByTarget(this.hintOpacity);
     }
 
     destroy(): void {
