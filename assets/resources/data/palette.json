@@ -1,0 +1,121 @@
+[
+  {
+    "id": 0,
+    "name": "white",
+    "count": 138,
+    "baseRGB": [
+      230,
+      229,
+      227
+    ],
+    "gemRGB": [
+      239,
+      238,
+      238
+    ],
+    "gem": "art/white-gem",
+    "correct": "art/white-correct"
+  },
+  {
+    "id": 1,
+    "name": "black",
+    "count": 128,
+    "baseRGB": [
+      25,
+      30,
+      36
+    ],
+    "gemRGB": [
+      56,
+      66,
+      76
+    ],
+    "gem": "art/black-gem",
+    "correct": "art/black-correct"
+  },
+  {
+    "id": 2,
+    "name": "green",
+    "count": 60,
+    "baseRGB": [
+      39,
+      130,
+      33
+    ],
+    "gemRGB": [
+      70,
+      199,
+      62
+    ],
+    "gem": "art/green-gem",
+    "correct": "art/green-correct"
+  },
+  {
+    "id": 3,
+    "name": "brown",
+    "count": 57,
+    "baseRGB": [
+      116,
+      59,
+      24
+    ],
+    "gemRGB": [
+      160,
+      79,
+      27
+    ],
+    "gem": "art/brown-gem",
+    "correct": "art/brown-correct"
+  },
+  {
+    "id": 4,
+    "name": "lime",
+    "count": 55,
+    "baseRGB": [
+      122,
+      165,
+      13
+    ],
+    "gemRGB": [
+      173,
+      223,
+      41
+    ],
+    "gem": "art/lime-gem",
+    "correct": "art/lime-correct"
+  },
+  {
+    "id": 5,
+    "name": "gold",
+    "count": 52,
+    "baseRGB": [
+      234,
+      153,
+      2
+    ],
+    "gemRGB": [
+      255,
+      200,
+      50
+    ],
+    "gem": "art/gold-gem",
+    "correct": "art/gold-correct"
+  },
+  {
+    "id": 6,
+    "name": "cyan",
+    "count": 36,
+    "baseRGB": [
+      57,
+      180,
+      171
+    ],
+    "gemRGB": [
+      53,
+      244,
+      241
+    ],
+    "gem": "art/cyan-gem",
+    "correct": "art/cyan-correct"
+  }
+]

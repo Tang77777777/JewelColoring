@@ -1,0 +1,14 @@
+{
+  "name": "JewelColoring",
+  "uuid": "f944fbd6-c39f-4bdb-ac1c-3e8bc3761749",
+  "creator": {
+    "version": "3.8.8"
+  },
+  "scripts": {
+    "test": "node tools/test.mjs",
+    "check": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "5.4.5"
+  }
+}

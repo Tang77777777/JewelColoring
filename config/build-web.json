@@ -1,0 +1,22 @@
+{
+  "platform": "web-mobile",
+  "name": "JewelColoring",
+  "debug": false,
+  "buildPath": "project://build",
+  "outputName": "web-mobile",
+  "startScene": "c9fc2ac8-8fa0-4b84-95a1-853d51ed3af4",
+  "scenes": [
+    {
+      "url": "db://assets/scenes/JewelColoring.scene",
+      "uuid": "c9fc2ac8-8fa0-4b84-95a1-853d51ed3af4"
+    }
+  ],
+  "packages": {
+    "web-mobile": {
+      "orientation": "portrait",
+      "embedWebDebugger": false
+    }
+  },
+  "sourceMaps": false,
+  "md5Cache": true
+}
