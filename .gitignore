@@ -27,3 +27,7 @@ tools/build-editor.js
 tools/setup-scene.js
 tools/convert-art.py
 settings/v2/packages/information.json
+assets/resources/level-tests/
+assets/resources/level-tests.meta
+__pycache__/
+*.pyc

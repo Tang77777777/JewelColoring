@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "defaults": {
+    "layout": "data/layout",
+    "palette": "data/palette",
+    "tray": "art/tray"
+  },
+  "levels": [
+    {
+      "id": "figma-pineapple",
+      "revision": 1,
+      "data": "data/level",
+      "base": "art/base"
+    }
+  ]
+}

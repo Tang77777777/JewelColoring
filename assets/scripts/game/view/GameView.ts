@@ -1,4 +1,4 @@
-import { Color, Graphics, Layers, Node, Sprite, SpriteFrame, Tween, UIOpacity, UITransform, Vec3, tween } from 'cc';
+import { Color, Graphics, isValid, Layers, Node, Sprite, SpriteFrame, Tween, UIOpacity, UITransform, Vec3, tween } from 'cc';
 import { Action, BoardModel, Location, Transfer } from '../core/BoardModel';
 import { LayoutData } from '../core/GridGeometry';
 import { GameSound, GameTuning as T } from '../GameTuning';
@@ -76,6 +76,7 @@ export class GameView {
         const node = uiNode(name, parent, width, height);
         const sprite = node.addComponent(Sprite);
         sprite.sizeMode = Sprite.SizeMode.CUSTOM;
+        sprite.trim = false;
         sprite.spriteFrame = frame;
         return node;
     }
@@ -108,14 +109,15 @@ export class GameView {
     private highlight(id: number, active: boolean): void {
         let node = this.highlights.get(id);
         if (!node && active) {
-            node = this.image('SelectedGlow', this.gems.get(id)!, this.frames.get('art/selection-glow')!, 36, 36);
+            const size = this.layout.cell * 36 / 32;
+            node = this.image('SelectedGlow', this.gems.get(id)!, this.frames.get('art/selection-glow')!, size, size);
             this.highlights.set(id, node);
         }
         if (node) node.active = active;
     }
 
     sync(immediate = false): void {
-        if (this.destroyed) return;
+        if (this.destroyed || !isValid(this.root, true)) return;
         const selected = new Set(this.model.selection?.ids ?? []);
         for (const [id, node] of this.gems) {
             // A different selection must never finish or restart an in-flight task.
@@ -159,7 +161,7 @@ export class GameView {
         this.hintOpacity.opacity = 255;
         if (color < 0) return;
         this.shade.fillColor = new Color(40, 36, 52, T.targetDimAlpha);
-        this.hints.lineWidth = 2;
+        this.hints.lineWidth = this.layout.cell / 16;
         this.hints.strokeColor = new Color(255, 255, 255, 250);
         const rgb = this.palette[color].baseRGB;
         this.hints.fillColor = new Color(rgb[0], rgb[1], rgb[2], 85);
@@ -167,16 +169,16 @@ export class GameView {
             if (target < 0 || this.model.board[index] >= 0 || this.blockedBoard.has(index)) return;
             const p = this.position({ region: 'board', index });
             if (target === color) {
-                this.hints.circle(p.x, p.y, 13);
+                this.hints.circle(p.x, p.y, this.layout.cell * 13 / 32);
                 this.targetCount++;
-            } else this.shade.circle(p.x, p.y, 14);
+            } else this.shade.circle(p.x, p.y, this.layout.cell * 14 / 32);
         });
         this.shade.fill();
         this.hints.fill();
         this.model.level.targets.forEach((target, index) => {
             if (target !== color || this.model.board[index] >= 0 || this.blockedBoard.has(index)) return;
             const p = this.position({ region: 'board', index });
-            this.hints.circle(p.x, p.y, 13);
+            this.hints.circle(p.x, p.y, this.layout.cell * 13 / 32);
         });
         this.hints.stroke();
         if (this.targetCount) {
@@ -311,7 +313,8 @@ export class GameView {
         if (this.destroyed) return Promise.resolve();
         let node = this.effectPool.pop();
         if (!node) {
-            node = this.image('GemSheen', this.effectLayer, this.frames.get('art/sparkle')!, 32, 32);
+            node = this.image('GemSheen', this.effectLayer, this.frames.get('art/sparkle')!,
+                this.layout.cell, this.layout.cell);
             node.addComponent(UIOpacity);
         }
         const effect = node;
@@ -330,9 +333,11 @@ export class GameView {
                 this.activeEffects.delete(effect);
                 Tween.stopAllByTarget(effect);
                 Tween.stopAllByTarget(opacity);
-                effect.active = false;
-                if (this.effectPool.length < 160) this.effectPool.push(effect);
-                else effect.destroy();
+                if (isValid(effect, true)) {
+                    effect.active = false;
+                    if (this.effectPool.length < 160) this.effectPool.push(effect);
+                    else effect.destroy();
+                }
                 resolve();
             };
             this.pending.add(finish);
@@ -389,10 +394,15 @@ export class GameView {
     }
 
     destroy(): void {
+        if (this.destroyed) return;
         this.stop();
         this.destroyed = true;
         this.gems.clear();
-        this.root.destroyAllChildren();
-        this.root.removeAllChildren();
+        // Scene destruction may already have destroyed children before the entry component.
+        if (isValid(this.root, true)) {
+            for (const sprite of this.root.getComponentsInChildren(Sprite)) sprite.spriteFrame = null;
+            this.root.destroyAllChildren();
+            this.root.removeAllChildren();
+        }
     }
 }

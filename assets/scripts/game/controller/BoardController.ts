@@ -15,6 +15,7 @@ interface MoveTask {
 
 export class BoardController {
     private generation = 0;
+    private valid = true;
     private announced = false;
     private paused = false;
     private nextTask = 0;
@@ -23,7 +24,11 @@ export class BoardController {
     private feedback: Promise<void> | null = null;
     finished = false;
 
-    constructor(public model: BoardModel, private readonly view: GamePresentation) {}
+    constructor(
+        public model: BoardModel,
+        private readonly view: GamePresentation,
+        private readonly onFinished: () => void = () => {},
+    ) {}
 
     get busy(): boolean {
         return this.tasks.size > 0 || (!this.paused && (this.feedback !== null || this.pendingColors.length > 0));
@@ -47,7 +52,7 @@ export class BoardController {
     }
 
     canClick(region: Region | 'outside', index = -1): boolean {
-        if (this.paused || this.model.completed) return false;
+        if (!this.valid || this.paused || this.model.completed) return false;
         if (region === 'outside') return true;
         if (region === 'tray') {
             if (this.trayLocked()) return false;
@@ -77,7 +82,7 @@ export class BoardController {
     }
 
     async click(region: Region | 'outside', index = -1): Promise<void> {
-        if (this.paused || this.model.completed) return;
+        if (!this.valid || this.paused || this.model.completed) return;
         const generation = this.generation;
         if (!this.canClick(region, index)) {
             await this.view.present({ type: 'invalid', reason: 'busy', moves: [] });
@@ -100,7 +105,7 @@ export class BoardController {
     }
 
     private flushFeedback(): Promise<void> {
-        if (this.paused || this.tasks.size) return Promise.resolve();
+        if (!this.valid || this.paused || this.tasks.size) return Promise.resolve();
         if (this.feedback) return this.feedback;
         if (!this.pendingColors.length && (!this.model.completed || this.announced)) return Promise.resolve();
         const generation = this.generation;
@@ -112,7 +117,10 @@ export class BoardController {
                 || this.pendingColors.length || !this.model.completed || this.announced) return;
             this.announced = true;
             await this.view.celebrate();
-            if (generation === this.generation) this.finished = true;
+            if (generation === this.generation) {
+                this.finished = true;
+                this.onFinished();
+            }
         });
         this.feedback = work;
         return (async () => {
@@ -136,6 +144,7 @@ export class BoardController {
     }
 
     invalidate(): void {
+        this.valid = false;
         this.generation++;
         this.tasks.clear();
         this.pendingColors.length = 0;

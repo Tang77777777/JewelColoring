@@ -1,4 +1,4 @@
-import { AudioClip, AudioSource, game, Node } from 'cc';
+import { AudioClip, AudioSource, game, isValid, Node } from 'cc';
 import { GameSound, SOUND_NAMES, SOUND_VOLUMES } from './GameTuning';
 
 interface Voice {
@@ -65,7 +65,7 @@ export class GameAudio {
 
     stop(): void {
         for (const voice of this.voices) {
-            voice.source.stop();
+            if (isValid(voice.source, true)) voice.source.stop();
             voice.endsAt = 0;
         }
     }
@@ -86,7 +86,12 @@ export class GameAudio {
 
     destroy(): void {
         this.stop();
-        this.node.off(AudioSource.EventType.ENDED, this.ended, this);
-        for (const voice of this.voices) voice.source.destroy();
+        const ownsNode = isValid(this.node, true);
+        if (ownsNode) this.node.off(AudioSource.EventType.ENDED, this.ended, this);
+        for (const voice of this.voices) {
+            if (!isValid(voice.source, true)) continue;
+            voice.source.clip = null;
+            if (ownsNode) voice.source.destroy();
+        }
     }
 }
