@@ -14,11 +14,23 @@ class AudioSource {
   clip = null;
   volume = 1;
   duration = 0.2;
-  play() { played.push(this.clip.name); }
-  stop() {}
+  currentTime = 0;
+  playing = false;
+  play() { this.playing = true; played.push(this.clip.name); }
+  pause() { this.playing = false; }
+  stop() { this.playing = false; this.currentTime = 0; }
   destroy() { this.valid = false; }
 }
-const cc = { AudioSource, game: { totalTime: 100 }, isValid: value => value && value.valid !== false };
+class Node {
+  valid = true;
+  children = [];
+  sources = [];
+  constructor(name) { this.name = name; }
+  set parent(node) { node.children.push(this); }
+  addComponent(Type) { const source = new Type(); source.node = this; this.sources.push(source); return source; }
+  destroy() { this.valid = false; this.sources.forEach(source => source.destroy()); }
+}
+const cc = { AudioSource, Node, game: { totalTime: 100 }, isValid: value => value && value.valid !== false };
 const cache = new Map();
 function load(name) {
   if (cache.has(name)) return cache.get(name);
@@ -35,7 +47,8 @@ function load(name) {
   return module.exports;
 }
 const { GameAudio } = load('GameAudio');
-const { SOUND_NAMES } = load('GameTuning');
+const { GameMusic } = load('GameMusic');
+const { SOUND_NAMES, MUSIC_VOLUME } = load('GameTuning');
 const tick = async () => { for (let i = 0; i < 12; i++) await Promise.resolve(); };
 function deferred() {
   let resolve;
@@ -138,4 +151,80 @@ await test('background arrival stays silent and resume restores future playback'
   f.audio.destroy();
 });
 
-console.log(`${passed} audio loading tests passed`);
+function musicFixture(override) {
+  const clip = { name: 'bgm', refs: 0,
+    addRef() { this.refs++; return this; }, decRef() { assert.ok(this.refs > 0); this.refs--; return this; } };
+  const host = new Node('Host');
+  let loads = 0;
+  const music = new GameMusic(host, () => {
+    loads++;
+    return override ? override(clip) : Promise.resolve(clip);
+  });
+  return { music, host, clip, loads: () => loads, source: () => host.children[0]?.sources[0] };
+}
+
+await test('music preloads silently and only the first gesture starts one looping source', async () => {
+  const f = musicFixture();
+  f.music.setPaused(false); await tick();
+  f.music.setPaused(true); f.music.setPaused(false);
+  assert.equal(played.length, 0);
+  f.music.startFromGesture(); f.music.startFromGesture(); await tick();
+  assert.deepEqual(played, ['bgm']);
+  assert.equal(f.source().loop, true);
+  assert.equal(f.source().volume, MUSIC_VOLUME);
+  assert.equal(f.source().playOnAwake, false);
+  assert.equal(f.loads(), 1);
+  f.music.destroy();
+  assert.equal(f.clip.refs, 0);
+});
+
+await test('music pauses and resumes at its saved position without repeated starts', async () => {
+  const f = musicFixture();
+  f.music.prepare(); await tick(); f.music.startFromGesture();
+  f.source().currentTime = 7;
+  f.music.setPaused(true); f.music.startFromGesture();
+  assert.equal(f.source().playing, false);
+  assert.equal(f.source().currentTime, 7);
+  f.music.setPaused(false); f.music.setPaused(false);
+  assert.equal(f.source().playing, true);
+  assert.equal(f.source().currentTime, 7);
+  assert.deepEqual(played, ['bgm', 'bgm']);
+  f.music.destroy();
+});
+
+await test('music requested before loading stays silent in background and resumes after arrival', async () => {
+  const pending = deferred(), f = musicFixture(() => pending.promise);
+  f.music.startFromGesture(); f.music.setPaused(true);
+  pending.resolve(f.clip); await tick();
+  assert.equal(played.length, 0);
+  f.music.setPaused(false);
+  assert.deepEqual(played, ['bgm']);
+  f.music.destroy();
+});
+
+await test('failed music retries with cooldown and keeps one source after recovery', async () => {
+  let fail = true;
+  const f = musicFixture(clip => fail ? Promise.reject(Error('music offline')) : Promise.resolve(clip));
+  f.music.startFromGesture(); await tick(); f.music.startFromGesture(); await tick();
+  assert.equal(f.loads(), 1);
+  assert.equal(played.length, 0);
+  fail = false; clock = 5000;
+  f.music.setPaused(false); await tick();
+  assert.equal(f.loads(), 2);
+  assert.equal(f.host.children.length, 1);
+  assert.deepEqual(played, ['bgm']);
+  f.music.destroy();
+});
+
+await test('late music after scene destruction releases its asset and never creates a source', async () => {
+  const pending = deferred(), f = musicFixture(() => pending.promise);
+  f.music.startFromGesture(); f.music.destroy(); f.music.destroy();
+  pending.resolve(f.clip); await tick();
+  f.music.prepare(); f.music.startFromGesture();
+  assert.equal(f.clip.refs, 0);
+  assert.equal(f.host.children.length, 0);
+  assert.equal(played.length, 0);
+  assert.equal(warnings.length, 0);
+});
+
+console.log(`${passed} audio lifecycle tests passed`);

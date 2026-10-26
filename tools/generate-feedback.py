@@ -1,4 +1,4 @@
-"""Generate original, reproducible feedback textures and short game sounds."""
+"""Generate feedback textures and fallback sounds without replacing imported audio."""
 
 import math
 from pathlib import Path
@@ -47,6 +47,9 @@ def chord(t, notes, stagger, decay):
 
 
 def sound(name, duration, signal):
+    destination = AUDIO / (name + ".wav")
+    if destination.exists():
+        return
     rng = random.Random(name)
     samples = []
     filtered = 0
@@ -58,7 +61,7 @@ def sound(name, duration, signal):
         samples.append(signal(t, filtered) * attack * release)
     peak = max(0.01, max(abs(value) for value in samples))
     data = [round(value / peak * 0.62 * 32767) for value in samples]
-    with wave.open(str(AUDIO / (name + ".wav")), "wb") as stream:
+    with wave.open(str(destination), "wb") as stream:
         stream.setparams((1, 2, RATE, len(data), "NONE", "not compressed"))
         stream.writeframes(struct.pack("<" + "h" * len(data), *data))
 
@@ -76,4 +79,4 @@ sound("cancel", 0.09, lambda t, noise: bell(t, 600 - t * 1500, 45))
 sound("invalid", 0.09, lambda t, noise: chord(t, [196, 277], 0, 40))
 sound("color", 0.38, lambda t, noise: chord(t, [1046.5, 1318.5, 1568], 0.065, 18))
 sound("win", 0.62, lambda t, noise: chord(t, [523.25, 659.25, 784, 1046.5], 0.09, 12))
-print("Generated 2 feedback textures and 9 original sounds.")
+print("Generated 2 feedback textures and any missing fallback sounds; existing audio preserved.")

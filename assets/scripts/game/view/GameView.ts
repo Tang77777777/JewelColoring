@@ -1,4 +1,4 @@
-import { Color, Graphics, isValid, Layers, Node, Sprite, SpriteFrame, Tween, UIOpacity, UITransform, Vec3, tween } from 'cc';
+import { isValid, Layers, Node, Sprite, SpriteFrame, Tween, UIOpacity, UITransform, Vec3, tween } from 'cc';
 import { Action, BoardModel, Location, Transfer } from '../core/BoardModel';
 import { LayoutData } from '../core/GridGeometry';
 import { GameSound, GameTuning as T } from '../GameTuning';
@@ -27,9 +27,6 @@ export class GameView {
     private readonly boardLayer: Node;
     private readonly trayLayer: Node;
     private readonly flightLayer: Node;
-    private readonly shade: Graphics;
-    private readonly hints: Graphics;
-    private readonly hintOpacity: UIOpacity;
     private readonly pending = new Set<() => void>();
     private readonly effectLayer: Node;
     private readonly effectPool: Node[] = [];
@@ -42,7 +39,7 @@ export class GameView {
     private selected = new Set<number>();
     private readonly renderCorrect = new Map<number, boolean>();
     private readonly renderedLocations = new Map<number, Location>();
-    private hintKey = '';
+    private targetKey = '';
 
     constructor(
         private readonly root: Node,
@@ -55,9 +52,6 @@ export class GameView {
         this.image('BaseArt', root, frames.get('art/base')!, layout.board.width, layout.board.height)
             .setPosition(this.point(layout.board.x + layout.board.width / 2,
                 layout.board.y + layout.board.height / 2));
-        this.shade = uiNode('TargetShade', root, layout.width, layout.height).addComponent(Graphics);
-        this.hints = uiNode('TargetHints', root, layout.width, layout.height).addComponent(Graphics);
-        this.hintOpacity = this.hints.node.addComponent(UIOpacity);
         this.boardLayer = uiNode('GemLayer', root, layout.width, layout.height);
         this.image('TrayArt', root, frames.get('art/tray')!, layout.tray.width, layout.tray.height)
             .setPosition(this.point(layout.tray.x + layout.tray.width / 2,
@@ -152,39 +146,15 @@ export class GameView {
     private refreshTargets(force = false): void {
         const color = this.model.selectedColor;
         const key = `${color}:${this.model.moves}:${this.blockedBoard.size}`;
-        if (!force && this.hintKey === key) return;
-        this.hintKey = key;
-        this.shade.clear();
-        this.hints.clear();
+        if (!force && this.targetKey === key) return;
+        this.targetKey = key;
         this.targetCount = 0;
-        Tween.stopAllByTarget(this.hintOpacity);
-        this.hintOpacity.opacity = 255;
         if (color < 0) return;
-        this.shade.fillColor = new Color(40, 36, 52, T.targetDimAlpha);
-        this.hints.lineWidth = this.layout.cell / 16;
-        this.hints.strokeColor = new Color(255, 255, 255, 250);
-        const rgb = this.palette[color].baseRGB;
-        this.hints.fillColor = new Color(rgb[0], rgb[1], rgb[2], 85);
         this.model.level.targets.forEach((target, index) => {
-            if (target < 0 || this.model.board[index] >= 0 || this.blockedBoard.has(index)) return;
-            const p = this.position({ region: 'board', index });
-            if (target === color) {
-                this.hints.circle(p.x, p.y, this.layout.cell * 13 / 32);
+            if (target === color && this.model.board[index] < 0 && !this.blockedBoard.has(index)) {
                 this.targetCount++;
-            } else this.shade.circle(p.x, p.y, this.layout.cell * 14 / 32);
+            }
         });
-        this.shade.fill();
-        this.hints.fill();
-        this.model.level.targets.forEach((target, index) => {
-            if (target !== color || this.model.board[index] >= 0 || this.blockedBoard.has(index)) return;
-            const p = this.position({ region: 'board', index });
-            this.hints.circle(p.x, p.y, this.layout.cell * 13 / 32);
-        });
-        this.hints.stroke();
-        if (this.targetCount) {
-            tween(this.hintOpacity).to(0.35, { opacity: 150 }, { easing: 'sineInOut' })
-                .to(0.35, { opacity: 255 }, { easing: 'sineInOut' }).repeat(2).start();
-        }
     }
 
     async present(action: Action): Promise<void> {
@@ -385,12 +355,10 @@ export class GameView {
     stop(): void {
         this.epoch++;
         for (const node of this.gems.values()) Tween.stopAllByTarget(node);
-        Tween.stopAllByTarget(this.hintOpacity);
         for (const finish of Array.from(this.pending)) finish();
         this.moving.clear();
         this.blockedBoard.clear();
         this.sync(true);
-        Tween.stopAllByTarget(this.hintOpacity);
     }
 
     destroy(): void {

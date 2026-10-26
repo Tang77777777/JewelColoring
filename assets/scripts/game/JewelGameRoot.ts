@@ -10,6 +10,7 @@ import { BoardController } from './controller/BoardController';
 import { GameView, uiNode } from './view/GameView';
 import { GameSound, GameTuning } from './GameTuning';
 import { GameAudio } from './GameAudio';
+import { GameMusic } from './GameMusic';
 import { AssetLease } from './AssetLease';
 import { LevelCatalog } from './level/LevelCatalog';
 import { LevelLoader, LoadedLevel } from './level/LevelLoader';
@@ -33,7 +34,7 @@ function loadFrame(path: string): Promise<SpriteFrame> {
     return new Promise((resolve, reject) => resources.load(path + '/spriteFrame', SpriteFrame,
         (error, asset) => error ? reject(error) : resolve(asset)));
 }
-function loadClip(name: GameSound): Promise<AudioClip> {
+function loadClip(name: GameSound | 'bgm'): Promise<AudioClip> {
     return new Promise((resolve, reject) => resources.load('audio/' + name, AudioClip,
         (error, asset) => error ? reject(error) : resolve(asset)));
 }
@@ -49,6 +50,7 @@ export class JewelGameRoot extends Component {
     private pendingAssets: AssetLease | null = null;
     private readonly frames = new Map<string, SpriteFrame>();
     private audio: GameAudio | null = null;
+    private music: GameMusic | null = null;
     private background: Node | null = null;
     private stage: Node | null = null;
     private status: Label | null = null;
@@ -82,6 +84,8 @@ export class JewelGameRoot extends Component {
         game.on(Game.EVENT_SHOW, this.onShow, this);
         this.audio = new GameAudio(this.node, loadClip);
         this.audio.setPaused(!this.isForeground);
+        this.music = new GameMusic(this.node, () => loadClip('bgm'));
+        this.music.setPaused(!this.isForeground);
         this.resize();
         this.installDiagnostics();
         await this.initialize();
@@ -277,6 +281,8 @@ export class JewelGameRoot extends Component {
 
     private touchStart(event: EventTouch): void {
         if (this.finger || !this.isForeground || this.phase === 'loading') return;
+        // Register Cocos' audio gesture handling before this touch ends (WebKit).
+        this.music?.startFromGesture();
         const id = event.getID();
         if (id !== null) this.finger = { id, start: event.getUILocation().clone() };
     }
@@ -317,6 +323,7 @@ export class JewelGameRoot extends Component {
 
     private keyDown(event: EventKeyboard): void {
         if (!this.isForeground) return;
+        if (event.keyCode === KeyCode.KEY_R || event.keyCode === KeyCode.ESCAPE) this.music?.startFromGesture();
         if (event.keyCode === KeyCode.KEY_R) this.restartLevel();
         if (event.keyCode === KeyCode.ESCAPE) void this.click('outside');
     }
@@ -326,12 +333,14 @@ export class JewelGameRoot extends Component {
         this.finger = null;
         void this.session?.controller.setPaused(true);
         this.audio?.setPaused(true);
+        this.music?.setPaused(true);
         this.session?.view.stop();
     }
 
     private onShow(): void {
         this.isForeground = true;
         this.audio?.setPaused(false);
+        this.music?.setPaused(false);
         void this.session?.controller.setPaused(false).catch(error => console.error('[Jewel]', error));
     }
 
@@ -351,6 +360,7 @@ export class JewelGameRoot extends Component {
                     activeMoves: controller.activeMoves, finished: controller.finished,
                     colorsRemaining: Array.from(model.remainingByColor.entries()),
                     feedback: view.diagnostics(), audio: this.audio?.diagnostics(),
+                    music: this.music?.diagnostics(),
                     phase: this.phase, foreground: this.isForeground, targetLevelId: this.targetLevelId,
                     nextLevelId: this.catalog!.next(this.loaded.definition.id)?.id ?? null,
                     progress: this.progress!.snapshot(), session: this.session.version,
@@ -374,6 +384,7 @@ export class JewelGameRoot extends Component {
         this.disposeSession(this.session);
         this.session = null;
         this.audio?.destroy();
+        this.music?.destroy();
         if (isValid(this.background, true)) {
             const sprite = this.background!.getComponent(Sprite);
             if (sprite) sprite.spriteFrame = null;
