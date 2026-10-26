@@ -1,37 +1,9 @@
-import type { Asset, JsonAsset, SpriteFrame } from 'cc';
+import type { JsonAsset, SpriteFrame } from 'cc';
+import { AssetLease } from '../AssetLease';
 import { LevelData, validateLevel } from '../core/BoardModel';
 import { LayoutData, RectData } from '../core/GridGeometry';
 import type { PaletteEntry } from '../view/GameView';
 import { requireObject, ResolvedLevelDefinition, resourcePath } from './LevelCatalog';
-
-// A closed lease also releases successful callbacks that arrive after failure/cancellation.
-export class AssetLease {
-    private readonly assets = new Set<Asset>();
-    private closed = false;
-
-    get size(): number { return this.assets.size; }
-
-    async hold<T extends Asset>(request: Promise<T>): Promise<T> {
-        const asset = await request;
-        if (this.closed) {
-            asset.addRef();
-            asset.decRef();
-            throw new Error('Asset load cancelled');
-        }
-        if (!this.assets.has(asset)) {
-            asset.addRef();
-            this.assets.add(asset);
-        }
-        return asset;
-    }
-
-    release(): void {
-        if (this.closed) return;
-        this.closed = true;
-        for (const asset of this.assets) asset.decRef();
-        this.assets.clear();
-    }
-}
 
 export interface LevelResources {
     json(path: string): Promise<JsonAsset>;

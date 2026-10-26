@@ -6,7 +6,7 @@ import ts from 'typescript';
 
 const root = path.resolve(new URL('..', import.meta.url).pathname);
 const out = path.join(root, 'temp/level-tests');
-for (const file of ['core/BoardModel', 'level/LevelCatalog', 'level/LevelLoader', 'level/ProgressStore',
+for (const file of ['AssetLease', 'core/BoardModel', 'level/LevelCatalog', 'level/LevelLoader', 'level/ProgressStore',
   'controller/BoardController']) {
   const target = path.join(out, file + '.js');
   fs.mkdirSync(path.dirname(target), { recursive: true });
@@ -17,7 +17,8 @@ for (const file of ['core/BoardModel', 'level/LevelCatalog', 'level/LevelLoader'
 }
 const require = createRequire(import.meta.url);
 const { LevelCatalog } = require(path.join(out, 'level/LevelCatalog.js'));
-const { LevelLoader, AssetLease, validateLevelContent } = require(path.join(out, 'level/LevelLoader.js'));
+const { LevelLoader, validateLevelContent } = require(path.join(out, 'level/LevelLoader.js'));
+const { AssetLease } = require(path.join(out, 'AssetLease.js'));
 const { ProgressStore, PROGRESS_KEY } = require(path.join(out, 'level/ProgressStore.js'));
 const { BoardModel } = require(path.join(out, 'core/BoardModel.js'));
 const { BoardController } = require(path.join(out, 'controller/BoardController.js'));

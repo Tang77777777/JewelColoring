@@ -1,5 +1,5 @@
 import {
-    _decorator, AudioClip, Color, Component, EventKeyboard, EventTouch,
+    _decorator, AudioClip, Color, Component, DynamicAtlasManager, EventKeyboard, EventTouch,
     Game, game, input, Input, isValid, JsonAsset, KeyCode, Label, Node, ResolutionPolicy,
     profiler, resources, Sprite, SpriteFrame, sys, UITransform, Vec2, Vec3, view,
 } from 'cc';
@@ -8,10 +8,11 @@ import { BoardModel, Region } from './core/BoardModel';
 import { hitBoard, hitTray } from './core/GridGeometry';
 import { BoardController } from './controller/BoardController';
 import { GameView, uiNode } from './view/GameView';
-import { SOUND_NAMES, GameSound } from './GameTuning';
+import { GameSound, GameTuning } from './GameTuning';
 import { GameAudio } from './GameAudio';
+import { AssetLease } from './AssetLease';
 import { LevelCatalog } from './level/LevelCatalog';
-import { AssetLease, LevelLoader, LoadedLevel } from './level/LevelLoader';
+import { LevelLoader, LoadedLevel } from './level/LevelLoader';
 import { PROGRESS_KEY, ProgressStore } from './level/ProgressStore';
 
 const { ccclass } = _decorator;
@@ -47,7 +48,6 @@ export class JewelGameRoot extends Component {
     private sharedAssets: AssetLease | null = null;
     private pendingAssets: AssetLease | null = null;
     private readonly frames = new Map<string, SpriteFrame>();
-    private clips = new Map<GameSound, AudioClip>();
     private audio: GameAudio | null = null;
     private background: Node | null = null;
     private stage: Node | null = null;
@@ -61,6 +61,11 @@ export class JewelGameRoot extends Component {
     private targetLevelId: string | null = null;
 
     async start(): Promise<void> {
+        const atlas = DynamicAtlasManager.instance;
+        if (atlas.enabled && atlas.atlasCount === 0) {
+            atlas.textureSize = GameTuning.dynamicAtlasSize;
+            atlas.maxFrameSize = GameTuning.dynamicAtlasMaxFrameSize;
+        }
         view.setDesignResolutionSize(1080, 1920, ResolutionPolicy.FIXED_HEIGHT);
         profiler.hideStats();
         this.stage = uiNode('Playfield', this.node, 1080, 1920);
@@ -75,6 +80,8 @@ export class JewelGameRoot extends Component {
         view.on('canvas-resize', this.resize, this);
         game.on(Game.EVENT_HIDE, this.onHide, this);
         game.on(Game.EVENT_SHOW, this.onShow, this);
+        this.audio = new GameAudio(this.node, loadClip);
+        this.audio.setPaused(!this.isForeground);
         this.resize();
         this.installDiagnostics();
         await this.initialize();
@@ -92,51 +99,61 @@ export class JewelGameRoot extends Component {
         this.setPhase('loading');
         const version = ++this.loadVersion;
         const assets = new AssetLease();
-        this.pendingAssets = assets;
+        const levelAssets = new AssetLease();
+        this.sharedAssets = assets;
+        this.pendingAssets = levelAssets;
         try {
             // Test catalogs use separate progress and are absent from release resources.
             const testLevels = DEBUG && typeof location !== 'undefined'
                 && new URLSearchParams(location.search).get('testLevels') === '1';
             const paths = ['art/background', 'art/selection-glow', 'art/sparkle'];
-            const [catalogAsset, frames, clips] = await Promise.all([
-                assets.hold(loadJson(testLevels ? 'level-tests/catalog' : 'levels/catalog')),
+            const firstLevel = assets.hold(loadJson(testLevels ? 'level-tests/catalog' : 'levels/catalog'))
+                .then(catalogAsset => {
+                    if (!this.alive || version !== this.loadVersion) throw new Error('Initialization cancelled');
+                    this.catalog = new LevelCatalog(catalogAsset.json);
+                    this.progress = new ProgressStore({
+                        getItem: key => sys.localStorage.getItem(key),
+                        setItem: (key, value) => sys.localStorage.setItem(key, value),
+                    }, testLevels ? PROGRESS_KEY + '.test' : PROGRESS_KEY);
+                    const definition = this.progress.startLevel(this.catalog);
+                    this.targetLevelId = definition.id;
+                    return this.loader.load(definition, levelAssets);
+                });
+            const [candidate, frames] = await Promise.all([
+                firstLevel,
                 Promise.all(paths.map(path => assets.hold(loadFrame(path)))),
-                Promise.all(SOUND_NAMES.map(name => assets.hold(loadClip(name)))),
             ]);
-            if (!this.alive || version !== this.loadVersion) { assets.release(); return; }
-            this.catalog = new LevelCatalog(catalogAsset.json);
-            this.progress = new ProgressStore({
-                getItem: key => sys.localStorage.getItem(key),
-                setItem: (key, value) => sys.localStorage.setItem(key, value),
-            }, testLevels ? PROGRESS_KEY + '.test' : PROGRESS_KEY);
+            if (!this.alive || version !== this.loadVersion) {
+                candidate.release();
+                assets.release();
+                return;
+            }
             paths.forEach((path, i) => this.frames.set(path, frames[i]));
-            this.clips = new Map(SOUND_NAMES.map((name, i) => [name, clips[i]]));
-            this.audio = new GameAudio(this.node, this.clips);
-            this.audio.setPaused(!this.isForeground);
             this.background = uiNode('Background', this.node.parent!, 1080, 1920);
             this.background.setSiblingIndex(0);
             const sprite = this.background.addComponent(Sprite);
             sprite.sizeMode = Sprite.SizeMode.CUSTOM;
             sprite.spriteFrame = this.frames.get('art/background')!;
-            this.sharedAssets = assets;
+            this.installLevel(candidate);
             this.pendingAssets = null;
             this.resize();
-            this.setPhase('boot');
-            await this.loadLevel(this.progress.startLevel(this.catalog).id);
+            console.info('[Jewel] ready', { level: candidate.definition.id, gems: candidate.level.gems.length,
+                slots: candidate.level.trayCols * candidate.level.trayRows });
         } catch (error) {
-            if (!this.alive || version !== this.loadVersion) { assets.release(); return; }
+            levelAssets.release();
+            assets.release();
+            if (!this.alive || version !== this.loadVersion) return;
+            ++this.loadVersion;
             this.pendingAssets = null;
-            this.audio?.destroy();
-            this.audio = null;
             const sprite = this.background?.getComponent(Sprite);
             if (sprite) sprite.spriteFrame = null;
             this.background?.destroy();
             this.background = null;
-            assets.release();
             this.sharedAssets = null;
             this.catalog = null;
+            this.progress = null;
+            this.targetLevelId = null;
             this.frames.clear();
-            this.clips.clear();
             this.setPhase('load-error');
             console.error('[Jewel] initialization failed', error);
         }
@@ -330,7 +347,7 @@ export class JewelGameRoot extends Component {
                     tray: [...model.tray], selection: model.selection,
                     correct: model.correctCount, completed: model.completed,
                     busy: controller.busy || this.phase === 'loading', moves: model.moves,
-                    audioReady: this.clips.size === SOUND_NAMES.length,
+                    audioReady: this.audio?.ready ?? false,
                     activeMoves: controller.activeMoves, finished: controller.finished,
                     colorsRemaining: Array.from(model.remainingByColor.entries()),
                     feedback: view.diagnostics(), audio: this.audio?.diagnostics(),
@@ -367,7 +384,6 @@ export class JewelGameRoot extends Component {
         this.loaded?.release();
         this.sharedAssets?.release();
         this.frames.clear();
-        this.clips.clear();
         input.off(Input.EventType.TOUCH_START, this.touchStart, this);
         input.off(Input.EventType.TOUCH_END, this.touchEnd, this);
         input.off(Input.EventType.TOUCH_CANCEL, this.touchCancel, this);
