@@ -5,7 +5,7 @@ import {
 } from 'cc';
 import { DEBUG } from 'cc/env';
 import { BoardModel, Region } from './core/BoardModel';
-import { hitBoard, hitTray } from './core/GridGeometry';
+import { boardHitCandidates, hitBoard, hitTray } from './core/GridGeometry';
 import { BoardController } from './controller/BoardController';
 import { GameView, uiNode } from './view/GameView';
 import { GameSound, GameTuning } from './GameTuning';
@@ -307,9 +307,14 @@ export class JewelGameRoot extends Component {
             if (tray >= 0) void this.nextLevel();
             return;
         }
-        const board = hitBoard(x, y, layout, level.cols, level.rows);
-        const region = tray >= 0 ? 'tray' : board >= 0 ? 'board' : 'outside';
-        void this.click(region, tray >= 0 ? tray : board);
+        if (tray >= 0) {
+            void this.click('tray', tray);
+            return;
+        }
+        const primary = hitBoard(x, y, layout, level.cols, level.rows);
+        const board = this.session.controller.resolveBoardHit(primary,
+            boardHitCandidates(x, y, layout, level.cols, level.rows, GameTuning.boardHitPadding));
+        void this.click(board >= 0 ? 'board' : 'outside', board);
     }
 
     private async click(region: Region | 'outside', index = -1): Promise<void> {

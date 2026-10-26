@@ -1,6 +1,7 @@
 export const GameTuning = {
     dynamicAtlasSize: 512,
     dynamicAtlasMaxFrameSize: 128,
+    boardHitPadding: 0.25,
     lift: 12,
     liftScale: 1.16,
     liftDuration: 1 / 6,

@@ -14,6 +14,25 @@ export function hitBoard(x: number, y: number, layout: LayoutData, cols: number,
     return col < 0 || col >= cols || row < 0 || row >= rows ? -1 : row * cols + col;
 }
 
+export function boardHitCandidates(
+    x: number, y: number, layout: LayoutData, cols: number, rows: number, padding: number,
+): number[] {
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return [];
+    const px = (x - layout.board.x) / layout.cell;
+    const py = (y - layout.board.y) / layout.cell;
+    const reach = 0.5 + Math.max(0, Math.min(0.5, padding));
+    const candidates: { index: number; distance: number }[] = [];
+    for (let row = Math.max(0, Math.floor(py) - 1); row <= Math.min(rows - 1, Math.floor(py) + 1); row++) {
+        for (let col = Math.max(0, Math.floor(px) - 1); col <= Math.min(cols - 1, Math.floor(px) + 1); col++) {
+            const dx = px - col - 0.5, dy = py - row - 0.5;
+            if (Math.abs(dx) <= reach && Math.abs(dy) <= reach) {
+                candidates.push({ index: row * cols + col, distance: dx * dx + dy * dy });
+            }
+        }
+    }
+    return candidates.sort((a, b) => a.distance - b.distance || a.index - b.index).map(cell => cell.index);
+}
+
 export function hitTray(x: number, y: number, layout: LayoutData, cols: number, rows: number): number {
     const px = x - layout.tray.x - layout.slot.x;
     const py = y - layout.tray.y - layout.slot.y;

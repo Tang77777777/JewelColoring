@@ -1,4 +1,7 @@
-import { isValid, Layers, Node, Sprite, SpriteFrame, Tween, UIOpacity, UITransform, Vec3, tween } from 'cc';
+import {
+    isValid, Layers, Node, RealCurve, RealInterpolationMode, Sprite, SpriteFrame, TangentWeightMode,
+    Tween, UIOpacity, UITransform, Vec3, tween,
+} from 'cc';
 import { Action, BoardModel, Location, Transfer } from '../core/BoardModel';
 import { LayoutData } from '../core/GridGeometry';
 import { GameSound, GameTuning as T } from '../GameTuning';
@@ -19,7 +22,22 @@ export function uiNode(name: string, parent: Node, width: number, height: number
     return node;
 }
 
+function flightCurve(x: number, y: number): RealCurve {
+    const curve = new RealCurve();
+    const tangent = y / x, weight = Math.hypot(x, y);
+    curve.assignSorted([
+        [0, { value: 0, interpolationMode: RealInterpolationMode.CUBIC,
+            tangentWeightMode: TangentWeightMode.RIGHT, rightTangent: tangent, rightTangentWeight: weight }],
+        [1, { value: 1, interpolationMode: RealInterpolationMode.CUBIC,
+            tangentWeightMode: TangentWeightMode.LEFT, leftTangent: tangent, leftTangentWeight: weight }],
+    ]);
+    return curve;
+}
+
 export class GameView {
+    // Normalized control points from the reference's position and scale animation tracks.
+    private readonly flightPositionCurve = flightCurve(0.64, 0.04);
+    private readonly flightScaleCurve = flightCurve(0.42, 0);
     private readonly gems = new Map<number, Node>();
     private readonly highlights = new Map<number, Node>();
     private readonly moving = new Set<number>();
@@ -224,12 +242,13 @@ export class GameView {
                 const arc = Math.min(T.flightArc, Vec3.distance(origin, destination) * 0.06);
                 tween(node).delay(order * interval)
                     .update(T.flightDuration, (target, ratio) => {
-                        const progress = ratio * (2 - ratio);
+                        const progress = this.flightPositionCurve.evaluate(ratio);
                         target.setPosition(
                             origin.x + (destination.x - origin.x) * progress,
                             origin.y + (destination.y - origin.y) * progress + 4 * arc * progress * (1 - progress), 0,
                         );
-                        const scale = startScale + (T.landingScale - startScale) * progress;
+                        const scale = startScale + (T.landingScale - startScale)
+                            * this.flightScaleCurve.evaluate(ratio);
                         target.setScale(scale, scale, 1);
                     })
                     .call(() => {
