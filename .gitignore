@@ -10,6 +10,8 @@ extensions/funplay-cocos-mcp/
 docs/
 source-art/
 **/*.md
+!/README.md
+!/DESIGN.md
 **/*.md.meta
 **/*.pdf
 **/*.doc
