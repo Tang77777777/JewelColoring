@@ -23,9 +23,18 @@ export const GameTuning = {
 export const SOUND_NAMES = ['pick', 'store', 'place', 'group', 'refill', 'cancel', 'invalid', 'color', 'win'] as const;
 export type GameSound = typeof SOUND_NAMES[number];
 
-export const MUSIC_VOLUME = 0.12;
+// A/B plays the original music and effects at equal gain; preserve that mix.
+export const AUDIO_MASTER_VOLUME = 0.25;
+export const MUSIC_VOLUME = AUDIO_MASTER_VOLUME;
 
 export const SOUND_VOLUMES: Record<GameSound, number> = {
-    pick: 0.5, store: 0.36, place: 0.32, group: 0.38, refill: 0.18,
-    cancel: 0.25, invalid: 0.25, color: 0.5, win: 0.55,
+    pick: AUDIO_MASTER_VOLUME,
+    store: AUDIO_MASTER_VOLUME,
+    place: AUDIO_MASTER_VOLUME,
+    group: AUDIO_MASTER_VOLUME,
+    refill: AUDIO_MASTER_VOLUME,
+    color: AUDIO_MASTER_VOLUME,
+    win: AUDIO_MASTER_VOLUME,
+    cancel: AUDIO_MASTER_VOLUME * 0.5,
+    invalid: AUDIO_MASTER_VOLUME * 0.5,
 };

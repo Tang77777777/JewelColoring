@@ -6,7 +6,8 @@
   },
   "scripts": {
     "test": "node tools/test.mjs && node tools/test-levels.mjs && node tools/test-audio.mjs",
-    "check": "tsc --noEmit"
+    "check": "tsc --noEmit",
+    "package:html": "node tools/package-html.mjs"
   },
   "devDependencies": {
     "typescript": "5.4.5"
