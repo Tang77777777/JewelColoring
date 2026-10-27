@@ -313,7 +313,7 @@ export class JewelGameRoot extends Component {
         }
         const primary = hitBoard(x, y, layout, level.cols, level.rows);
         const board = this.session.controller.resolveBoardHit(primary,
-            boardHitCandidates(x, y, layout, level.cols, level.rows, GameTuning.boardHitPadding));
+            boardHitCandidates(x, y, layout, level.cols, level.rows, GameTuning.boardHitTolerance));
         void this.click(board >= 0 ? 'board' : 'outside', board);
     }
 

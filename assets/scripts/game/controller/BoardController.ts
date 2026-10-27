@@ -69,20 +69,14 @@ export class BoardController {
 
     resolveBoardHit(primary: number, candidates: readonly number[]): number {
         const model = this.model;
-        if (primary >= 0 && model.level.targets[primary] >= 0
-            && (model.board[primary] >= 0 || !this.canClick('board', primary)
-                || (model.selection && model.level.targets[primary] === model.selectedColor))) {
-            return primary;
+        // A/B tries every nearby placement before allowing a tap to switch groups.
+        if (model.selection) {
+            const target = candidates.find(index => model.board[index] < 0
+                && model.level.targets[index] === model.selectedColor && this.canClick('board', index));
+            if (target !== undefined) return target;
         }
-        const eligible = candidates.filter(index => model.level.targets[index] >= 0
-            && (model.selection
-                ? model.board[index] < 0 && model.level.targets[index] === model.selectedColor
-                : model.board[index] >= 0 && !model.isCorrect(index))
-            && this.canClick('board', index));
-        if (model.selection) return eligible[0] ?? primary;
-        // A missed tap between different colors must not silently choose a group.
-        const colors = new Set(eligible.map(index => model.level.gems[model.board[index]].color));
-        return colors.size === 1 ? eligible[0] : primary;
+        return candidates.find(index => model.board[index] >= 0 && !model.isCorrect(index)
+            && this.canClick('board', index)) ?? primary;
     }
 
     private reserve(action: Action): number {

@@ -14,11 +14,12 @@ function compile(relative) {
     compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.CommonJS },
   }).outputText);
 }
-for (const file of ['core/BoardModel.ts', 'core/GridGeometry.ts', 'controller/BoardController.ts']) compile(file);
+for (const file of ['core/BoardModel.ts', 'core/GridGeometry.ts', 'controller/BoardController.ts', 'GameTuning.ts']) compile(file);
 const require = createRequire(import.meta.url);
 const { BoardModel, validateLevel } = require(path.join(out, 'core/BoardModel.js'));
 const { BoardController } = require(path.join(out, 'controller/BoardController.js'));
 const { boardHitCandidates, hitBoard, hitTray } = require(path.join(out, 'core/GridGeometry.js'));
+const { GameTuning } = require(path.join(out, 'GameTuning.js'));
 const level = JSON.parse(fs.readFileSync(path.join(root, 'assets/resources/data/level.json')));
 const layout = JSON.parse(fs.readFileSync(path.join(root, 'assets/resources/data/layout.json')));
 const fixture = (targets, colors, cols = targets.length, trayCols = 3, trayRows = 2) => ({
@@ -156,33 +157,51 @@ await test('geometry: all corners, tray final slot and outside', () => {
   assert.equal(hitTray(1000, 1700, layout, 14, 5), -1);
 });
 await test('nearby board hits stay local, sorted, and inside the grid', () => {
-  assert.deepEqual(boardHitCandidates(198, 236, layout, 21, 33, 0.25), [0]);
-  assert.deepEqual(boardHitCandidates(195, 236, layout, 21, 33, 0.25), []);
-  assert.deepEqual(boardHitCandidates(238, 236, layout, 21, 33, 0.25), [1, 0]);
-  assert.deepEqual(boardHitCandidates(220, 236, layout, 21, 33, 0.25), [0]);
-  assert.deepEqual(boardHitCandidates(880, 1260, layout, 21, 33, 0.25), [692]);
-  assert.deepEqual(boardHitCandidates(220, 190, layout, 21, 33, 0.25), []);
+  assert.deepEqual(boardHitCandidates(198, 236, layout, 21, 33, 1.5), [0]);
+  assert.deepEqual(boardHitCandidates(195, 236, layout, 21, 33, 1.5), []);
+  assert.deepEqual(boardHitCandidates(238, 236, layout, 21, 33, 1.5), [1, 0]);
+  assert.deepEqual(boardHitCandidates(220, 236, layout, 21, 33, 1.5), [0]);
+  assert.deepEqual(boardHitCandidates(880, 1260, layout, 21, 33, 1.5), [692]);
+  assert.deepEqual(boardHitCandidates(220, 190, layout, 21, 33, 1.5), []);
 });
-await test('edge selection accepts a nearby group without guessing between colors', () => {
+await test('reference hit area covers four cell widths including diagonal and outer-edge hits', () => {
+  const center = (col, row) => [layout.board.x + (col + 0.5) * layout.cell,
+    layout.board.y + (row + 0.5) * layout.cell];
+  const [x, y] = center(2, 2);
+  const candidates = boardHitCandidates(x, y, layout, 21, 33, GameTuning.boardHitTolerance);
+  assert.equal(candidates[0], 44);
+  assert.equal(candidates.length, 25);
+  assert.ok(candidates.includes(0));
+  assert.ok(candidates.includes(88));
+  assert.ok(!candidates.includes(89));
+  const [left, top] = center(0, 0);
+  assert.deepEqual(boardHitCandidates(left - 2 * layout.cell, top - 2 * layout.cell,
+    layout, 21, 33, GameTuning.boardHitTolerance), [0]);
+  assert.deepEqual(boardHitCandidates(left - 2 * layout.cell - 0.01, top,
+    layout, 21, 33, GameTuning.boardHitTolerance), []);
+  assert.deepEqual(boardHitCandidates(NaN, y, layout, 21, 33, GameTuning.boardHitTolerance), []);
+});
+await test('edge selection follows the nearest selectable candidate across different colors', () => {
   const m = new BoardModel(fixture([-1, 1, 0], [-1, 0, 1]));
   const { controller: c } = controlled(m);
   const before = JSON.stringify([m.board, m.tray, m.selection]);
   assert.equal(c.resolveBoardHit(0, [1]), 1);
   assert.equal(c.resolveBoardHit(-1, [1]), 1);
-  assert.equal(c.resolveBoardHit(0, [1, 2]), 0);
+  assert.equal(c.resolveBoardHit(0, [1, 2]), 1);
+  assert.equal(c.resolveBoardHit(0, [2, 1]), 2);
   assert.equal(c.resolveBoardHit(-1, []), -1);
   assert.equal(JSON.stringify([m.board, m.tray, m.selection]), before);
 });
-await test('direct gem taps keep their color and cancellation even when another group is selected', async () => {
+await test('without a legal destination, nearest gem taps switch groups and cancel normally', async () => {
   const m = new BoardModel(fixture([1, 0, 2], [0, 1, 2]));
   const { controller: c } = controlled(m);
   await c.click('board', 0);
-  assert.equal(c.resolveBoardHit(1, [0, 1]), 1);
-  await c.click('board', c.resolveBoardHit(1, [0, 1]));
+  assert.equal(c.resolveBoardHit(1, [1, 0]), 1);
+  await c.click('board', c.resolveBoardHit(1, [1, 0]));
   assert.equal(m.selectedColor, 1);
   await c.click('board', c.resolveBoardHit(1, [1, 0]));
   assert.equal(m.selection, null);
-  assert.equal(c.resolveBoardHit(2, [1, 2]), 2);
+  assert.equal(c.resolveBoardHit(2, [2, 1]), 1);
   m.assertValid();
 });
 await test('placement assistance only targets empty cells of the held color', async () => {
@@ -192,7 +211,7 @@ await test('placement assistance only targets empty cells of the held color', as
   await c.click('tray', 0);
   assert.equal(m.selectedColor, 1);
   assert.equal(c.resolveBoardHit(0, [0, 2, 1]), 1);
-  assert.equal(c.resolveBoardHit(-1, [2, 3]), -1);
+  assert.equal(c.resolveBoardHit(-1, [2, 3]), 2);
   assert.equal(c.resolveBoardHit(1, [0, 1]), 1);
   const placing = c.click('board', c.resolveBoardHit(0, [0, 1]));
   assert.equal(m.isCorrect(1), true);
@@ -200,14 +219,70 @@ await test('placement assistance only targets empty cells of the held color', as
   await placing;
   m.assertValid();
 });
-await test('nearby hits cannot bypass moving source or destination locks', async () => {
+await test('nearby hits skip moving source cells while allowing another unlocked group', async () => {
   const m = new BoardModel(fixture([1, 0, 1, 0], [0, 1, 0, 1], 4));
   const { controller: c, pending } = controlled(m);
   await c.click('board', 0);
   const moving = c.click('tray', 0);
-  assert.equal(c.resolveBoardHit(0, [0, 1]), 0);
+  assert.equal(c.resolveBoardHit(0, [0, 1]), 1);
   assert.equal(c.resolveBoardHit(-1, [0]), -1);
   assert.equal(c.resolveBoardHit(-1, [2]), 2);
+  pending.shift()();
+  await moving;
+  m.assertValid();
+});
+await test('a tap inside another gem places the held color into a nearby empty target first', async () => {
+  for (const source of ['board', 'tray']) {
+    const m = new BoardModel(fixture([0, 1, 2, 0, 1], [1, 2, 0, 1, 0]));
+    m.clickBoard(1);
+    m.clickTray(0);
+    if (source === 'tray') {
+      m.clickBoard(0);
+      m.clickTray(5);
+      m.clickTray(m.tray.findIndex(id => id >= 0 && m.level.gems[id].color === 1));
+    } else m.clickBoard(0);
+    const { controller: c, pending } = controlled(m);
+    const x = layout.board.x + 2 * layout.cell + 2;
+    const y = layout.board.y + layout.cell / 2;
+    const primary = hitBoard(x, y, layout, 5, 1);
+    const candidates = boardHitCandidates(x, y, layout, 5, 1, GameTuning.boardHitTolerance);
+    assert.equal(primary, 2);
+    assert.equal(candidates[0], 2);
+    assert.equal(c.resolveBoardHit(primary, candidates), 1);
+    const occupiedGem = m.board[2];
+    const placing = c.click('board', c.resolveBoardHit(primary, candidates));
+    assert.equal(m.isCorrect(1), true);
+    assert.equal(m.board[2], occupiedGem);
+    assert.equal(m.selection, null);
+    pending.shift()();
+    await placing;
+    m.assertValid();
+  }
+});
+await test('placement chooses the nearest legal target and does not reach outside the hit area', () => {
+  const m = new BoardModel(fixture([0, 1, 2, 0, 1], [1, 2, 0, 1, 0]));
+  for (const cell of [1, 4]) { m.clickBoard(cell); m.clickTray(5); }
+  m.clickBoard(0);
+  const { controller: c } = controlled(m);
+  assert.equal(c.resolveBoardHit(2, [2, 1, 4]), 1);
+  assert.equal(c.resolveBoardHit(2, [2, 4, 1]), 4);
+  assert.equal(c.resolveBoardHit(2, [2, 3]), 2);
+  assert.equal(c.resolveBoardHit(-1, []), -1);
+  m.assertValid();
+});
+await test('expanded placement skips cells reserved by an unfinished move', async () => {
+  const m = new BoardModel(fixture([0, 1, 2, 0, 1], [1, 2, 0, 1, 0]));
+  m.clickBoard(1);
+  m.clickTray(0);
+  const { controller: c, pending } = controlled(m);
+  await c.click('board', 0);
+  const moving = c.click('board', 1);
+  await c.click('board', 2);
+  assert.equal(m.selectedColor, 0);
+  assert.equal(m.board[0], -1);
+  assert.equal(c.canClick('board', 0), false);
+  assert.equal(c.resolveBoardHit(0, [0, 2]), 2);
+  assert.equal(c.resolveBoardHit(1, [1, 2]), 2);
   pending.shift()();
   await moving;
   m.assertValid();
