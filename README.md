@@ -1,6 +1,8 @@
 # Jewel Coloring
 
-使用 Cocos Creator 3.8.8 和 TypeScript 实现的宝石填色试玩游戏。
+使用 Cocos Creator 3.8.8 和 TypeScript 实现的 Jewel Coloring 核心玩法试玩项目，主要还原宝石选取、暂存、归位与填色通关流程，并非完整商业版本。
+
+原版完整游戏：[Jewel Coloring（Google Play）](https://play.google.com/store/apps/details?id=color.number.paint.pixle.art.sort.jigsaw)
 
 ## 在线试玩
 
